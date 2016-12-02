@@ -6,7 +6,7 @@ MinorityReport.py is a python script meant to find genetic differences in parent
 
 This program takes the genome FASTA file, the corresponding gene model in GFF3 format, and the parent and child SAM files, respectively. FASTQ files should be filtered for quality, aligned to a reference genome with a tool such as BowTie2, and output in SAM format. 
 
-The script MinorityReport-MASTER.py is meant to divide this task across processors on your computer, one per chromosome in the genome. This accelerates the process enormously, but requires one processor per genome.
+The script MinorityReport-MASTER.py is meant to divide this task across processors on your computer, one per chromosome in the genome. This accelerates the process enormously, but requires one processor per chromosome.
 
 
 Usage: MinorityReport.py <ref seq FASTA> <ref seq gff> <sam alignment parent> <sam alignment mutant>
