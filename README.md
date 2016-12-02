@@ -12,7 +12,9 @@ The script MinorityReport-MASTER.py is meant to divide this task across processo
 Usage: MinorityReport.py <ref seq FASTA> <ref seq gff> <sam alignment parent> <sam alignment mutant>
 
 e.g.:    ./MinorityReport.py species.fna species.gff species-bug1.bowtie2.sam species-bug2.bowtie2.sam
-Options: -vp  <minimum_variant_proportion>	    minimum fraction of reads at position supporting variant to accept (default=0.3).
+Options: 
+         
+         -vp  <minimum_variant_proportion>	    minimum fraction of reads at position supporting variant to accept (default=0.3).
          -wp  <maximum_variant_proportion>	    maximum fraction of reads at position supporting wildtype to accept (default=0.01).
          -vc  <minimum_variant_counts>	        minimum mutant-strain reads covering position to evaluate (default=30).
          -wc  <maximum_wildtype_variant_counts>	maximum parent-strain reads with variant to report (default=0).
@@ -40,34 +42,32 @@ Results: Here, we present open source software written in python, MinorityReport
 
 Conclusions: MinorityReport is readily available (github: xxxxxxx) to identify the genetic mechanisms of drug resistance in plasmodium, genotype-phenotype relationships in human diads, or genomic variations between any two related organisms.
 
-#==============================================================================#
-# MinorityReport.py
-# 20150826 Jeremy Horst
-# 20161128 last update (added SoftClip option in CIGAR string)
+MinorityReport.py
+20150826 Jeremy Horst
+20161128 last update (added SoftClip option in CIGAR string)
+
+INPUT:	FASTA of reference sequence
+		GFF gene annotation file (SAME CHROMOSOME NAMES AS FASTA!!!)
+		parent strain SAM alignment file
+		child/mutant strain SAM alignment file
+
+nonsynonymous variants
+PROCESS: *populate hash table for each position from SAM files, with evidence = counts
+          handle deletions as #-'s. 
+          handle insertions as sequence position = A[CTGCTGCTG], where A is the reference sequence position left of the insertion
+          e.g. sequence[2456821] = {'A':3,'---':426,'C':5,'T':3,'G':51, 'GTCGTACGTAGCTAGC':20}
+          check for variants over % threshold
+          check if variant is in protein coding region
+          check if variant changes the amino acid
+          compare parent to child
+OUTPUT:   report all variants over n% abundant in reads mapped to this position, unique in child w.r.t. parent
 #
-# INPUT:	FASTA of reference sequence
-#			GFF gene annotation file (SAME CHROMOSOME NAMES AS FASTA!!!)
-#			parent strain SAM alignment file
-#			child/mutant strain SAM alignment file
-#
-# nonsynonymous variants
-# PROCESS: *populate hash table for each position from SAM files, with evidence = counts
-#           handle deletions as #-'s. 
-#           handle insertions as sequence position = A[CTGCTGCTG], where A is the reference sequence position left of the insertion
-#           e.g. sequence[2456821] = {'A':3,'---':426,'C':5,'T':3,'G':51, 'GTCGTACGTAGCTAGC':20}
-#           check for variants over % threshold
-#           check if variant is in protein coding region
-#           check if variant changes the amino acid
-#           compare parent to child
-# OUTPUT:   report all variants over n% abundant in reads mapped to this position, unique in child w.r.t. parent
-#
-# copy number variants
-# PROCESS:  build gene model & data structure from FASTA & GFF
-#          *read in each SAM file, with the start & end of each read
-#           examine tiles / sliding windows (depending on settings) across each chromosome
-#          *check overlap of reads to each tile
-#           take ratio of mutant to parent, in context of overall counts  
-#			do statistics on distribution for read ratio for each tile
-#			* = slow steps / bottlenecks
-# OUTPUT:	report statistics of read ratios for each tile
-#==============================================================================#
+copy number variants
+PROCESS:  build gene model & data structure from FASTA & GFF
+         *read in each SAM file, with the start & end of each read
+          examine tiles / sliding windows (depending on settings) across each chromosome
+         *check overlap of reads to each tile
+          take ratio of mutant to parent, in context of overall counts  
+          do statistics on distribution for read ratio for each tile
+         * = slow steps / bottlenecks
+OUTPUT:	report statistics of read ratios for each tile
