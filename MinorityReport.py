@@ -3,7 +3,7 @@
 #==============================================================================#
 # MinorityReport.py
 # 20150826 Jeremy Horst
-# 20160322 last update (added CNV calculation)
+# 20161128 last update (added SoftClip option in CIGAR string)
 #
 # INPUT:	FASTA of reference sequence
 #			GFF gene annotation file (SAME CHROMOSOME NAMES AS FASTA!!!)
@@ -919,7 +919,7 @@ MinorityReport.py is a python script meant to find genetic differences in parent
 
 This program takes the genome FASTA file, the corresponding gene model in GFF3 format, and the parent and child SAM files, respectively. FASTQ files should be filtered for quality, aligned to a reference genome with a tool such as BowTie2, and output in SAM format. 
 
-The script MinorityReport-ChromosomeRunner.py is meant to divide this task across processors on your computer, one per chromosome in the genome. This accelerates the process enormously, but requires one processor per genome.
+The script MinorityReport-MASTER.py is meant to divide this task across processors on your computer, one per chromosome in the genome. This accelerates the process enormously, but requires one processor per chromosome.
 """,file=sys.stderr)
 	print("\nUsage: MinorityReport.py <ref seq FASTA> <ref seq gff> <sam alignment parent> <sam alignment mutant>",file=sys.stderr)
 	print("\ne.g.:    ./MinorityReport.py species.fna species.gff species-bug1.bowtie2.sam species-bug2.bowtie2.sam",file=sys.stderr)
