@@ -3,7 +3,8 @@
 #==============================================================================#
 # MinorityReport.py
 # 20150826 Jeremy Horst
-# 20161128 last update (added SoftClip option in CIGAR string)
+# 20161220 added GTF/GFF2 option
+# 20161128 added SoftClip option in CIGAR string
 #
 # INPUT:	FASTA of reference sequence
 #			GFF gene annotation file (SAME CHROMOSOME NAMES AS FASTA!!!)
@@ -50,6 +51,7 @@ minimum_wildtype_total_counts = 10
 desired_gene_type_in_GFF = 'CDS'
 GFF_description_line = 'gene'
 description_key = 'description'
+GTF = False
 trust_nonmatching_alignment = True
 position_read_report = False
 verbose = False
@@ -693,25 +695,44 @@ def prep_gene_model(CDS_exons, gene_id):
 def read_gff(gff_file_handle,reference_sequences):
 	print("Reading GFF file gene model...",file=sys.stderr)
 	
-	# get descriptions from gene lines
 	gene_descriptions = {}
 	mRNA_parent_gene_id = {}
+	gtf_cds_gene_frame = {}
 	for line in open(gff_file_handle).readlines():
 		if not line[0]=='#':
 			if len(line.split()) > 4:
 				entry_type = line.split()[2].lower()
+				# get descriptions from gene lines
 				if entry_type == GFF_description_line:
-					gene_id = line.split('ID=')[1].split(';')[0].strip()
-					gene_id = gene_id.split('-')[0]
+					if GTF:
+						gene_id = line.split('gene_id ')[1].split(';')[0].replace('"','').strip()
+					else: #(GFF3)
+						gene_id = line.split('ID=')[1].split(';')[0].replace('"','').strip()
+						gene_id = gene_id.split('-')[0]
 					description = ''
 					if description_key+'=' in line:
-						description = line.split(description_key+'=')[1].split(';')[0].replace('%28','(').replace('%29',')').replace('%2C',',').replace('%2F','/').replace('+',' ').strip()
+						description = line.split(description_key+'=')[1].split(';')[0].replace('%28','(').replace('%29',')').replace('%2C',',').replace('%2F','/').replace('+',' ').replace('"','').strip()
+					elif description_key+' ' in line:
+						description = line.split(description_key+' ')[1].split(';')[0].replace('%28','(').replace('%29',')').replace('%2C',',').replace('%2F','/').replace('+',' ').replace('"','').strip()
 					gene_descriptions[gene_id] = description
 				# get mRNA name that holds splice isoform together
-				elif entry_type == 'mrna':
-					mRNA_id = line.split('ID=')[1].split(';')[0].strip()
-					parent_gene_id = line.split('Parent=')[1].split(';')[0].strip()
+				if GTF and entry_type == desired_gene_type_in_GFF:
+					mRNA_id = line.split('exon_id ')[1].split(';')[0].replace('"','').strip()
+					parent_gene_id = line.split('gene_id ')[1].split(';')[0].replace('"','').strip()
 					mRNA_parent_gene_id[mRNA_id] = parent_gene_id
+				elif entry_type == 'mrna':
+					mRNA_id = line.split('ID=')[1].split(';')[0].replace('"','').strip()
+					parent_gene_id = line.split('Parent=')[1].split(';')[0].replace('"','').strip()
+					mRNA_parent_gene_id[mRNA_id] = parent_gene_id
+				if GTF and entry_type == 'cds':
+					gene_id = line.split('gene_id ')[1].split(';')[0].replace('"','').strip()
+					exon_number = line.split('exon_number ')[1].split(';')[0].replace('"','').strip()
+					frame = int(line.split()[7])
+					if not gtf_cds_gene_frame.has_key(gene_id):  gtf_cds_gene_frame[gene_id] = {}
+					gtf_cds_gene_frame[gene_id][exon_number] = frame
+					
+					
+					
 
 	# load in gene starts & ends, sequence (get reverse compliment for neg strands)
 	gff_model = {}
@@ -723,14 +744,25 @@ def read_gff(gff_file_handle,reference_sequences):
 		if not line[0]=='#':
 			if len(line.split()) > 4:
 				
+				gene_type=''
 				# handle multiple exons, & :. AA indexing across...
-				entry_type = line.split()[2].upper()
-				if 'ID=' in line:
-					gene_id = line.split('ID=')[1].split(';')[0].strip()
-				if 'Name=' in line:
-					gene_type = line.split('Name=')[1].split(';')[0].upper().strip()
-				if 'Parent=' in line:
-					parent_mRNA = line.split('Parent=')[1].split(';')[0].strip()
+				if GTF:
+					entry_type = line.split()[2].lower()
+					if entry_type == desired_gene_type_in_GFF:
+						gene_type=''
+						gene_id = line.split('exon_id ')[1].split(';')[0].replace('"','').strip()
+						exon_number = line.split('exon_number ')[1].split(';')[0].replace('"','').strip()
+						parent_mRNA = line.split('gene_id ')[1].split(';')[0].replace('"','').strip()
+						if 'gene_type ' in line:
+							gene_type = line.split('gene_type ')[1].split(';')[0].upper().replace('"','').strip()
+						elif 'gene_biotype ' in line:
+							gene_type = line.split('gene_biotype ')[1].split(';')[0].upper().replace('"','').strip()
+				else:
+					entry_type = line.split()[2].upper()
+					gene_id = line.split('ID=')[1].split(';')[0].replace('"','').strip()
+					gene_type = line.split('Name=')[1].split(';')[0].upper().replace('"','').strip()
+					parent_mRNA = line.split('Parent=')[1].split(';')[0].replace('"','').strip()
+				# non-exon containing genomes SHOULD but may not have this entry.
 				
 				if gene_id.lower().startswith(desired_gene_type_in_GFF.lower()) or gene_type == desired_gene_type_in_GFF or entry_type == desired_gene_type_in_GFF:  # only protein coding regions will have a CDS entry
 					if parent_mRNA != old_parent_mRNA:
@@ -746,9 +778,14 @@ def read_gff(gff_file_handle,reference_sequences):
 							if not gff_model.has_key(refseq_chromosome_ID):  gff_model[refseq_chromosome_ID] = [[0,1,'','','',0,0,0,1,'']]
 							
 							# find gene descriptions
-							description = gene_descriptions[mRNA_parent_gene_id[old_parent_mRNA]]
+							if GTF:	description = gene_descriptions[old_parent_mRNA]
+							else:	description = gene_descriptions[mRNA_parent_gene_id[old_parent_mRNA]]
 							
-							simplified_mRNA_name = old_parent_mRNA[4:]			# remove the "rna_" at the beginning
+							# remove the "rna_" at the beginning
+							if old_parent_mRNA.startswith("rna_"):
+								simplified_mRNA_name = old_parent_mRNA[4:]
+							else: simplified_mRNA_name = old_parent_mRNA
+							
 							gff_model[refseq_chromosome_ID] += [[ gene_start, gene_end, strand, simplified_mRNA_name, old_gene_name, protein_length, AA_indices, CDS_exons, stop, description ]]
 							
 						# reset for new gene
@@ -761,7 +798,13 @@ def read_gff(gff_file_handle,reference_sequences):
 					CDS_start = int(line.split()[3])-1 # to fix [1:]
 					CDS_end   = int(line.split()[4]) # to fix [1:]
 					strand = line.split()[6]
-					frame = int(line.split()[7])
+					if GTF:
+						try:  frame = gtf_cds_gene_frame[parent_mRNA][exon_number]
+						except:
+							print('WARNING: CDS line missing for',parent_mRNA,'proceeding with 0 value',file=sys.stderr)
+							frame = 0
+					else:
+						frame = int(line.split()[7])
 					refseq_chromosome_ID = line.split()[0]
 					sequence = reference_sequences[refseq_chromosome_ID][1][ CDS_start : CDS_end ]		 
 					CDS_exons += [[ CDS_start, CDS_end, strand, sequence, frame ]]
@@ -815,7 +858,6 @@ def make_evidence_hash_table(reference_sequence_file_handle):
 ##############
 
 try:
-	
 	# load required input arguments
 	reference_sequence_file_handle = sys.argv[1]
 	gff_file_handle = sys.argv[2]
@@ -823,6 +865,11 @@ try:
 	mutant_sam_file_handle = sys.argv[4]
 	
 	# load optional input arguments
+	if gff_file_handle[-3:].lower()=='gtf':
+		print('GTF instead of GFF3 format detected - WARNING may not perform optimally.', file=sys.stderr)
+		GTF = True
+		description_key = 'gene_name'
+		desired_gene_type_in_GFF = 'exon'
 	if '-vp' in sys.argv:		# threshold to report positions, if the reference nucleotide is not supported by >n% of data
 		minimum_variant_proportion = float(sys.argv[sys.argv.index('-vp')+1])
 		if minimum_variant_proportion>1 or minimum_variant_proportion<0: error
@@ -913,7 +960,6 @@ try:
 		print('SAM mapping complete.',file=sys.stderr)
 	
 except:
-	
 	print("""
 MinorityReport.py is a python script meant to find genetic differences in parent-child diads or strain pairs by comparing genomic sequencing reads aligned to the same reference genome. 
 
@@ -923,7 +969,8 @@ The script MinorityReport-MASTER.py is meant to divide this task across processo
 """,file=sys.stderr)
 	print("\nUsage: MinorityReport.py <ref seq FASTA> <ref seq gff> <sam alignment parent> <sam alignment mutant>",file=sys.stderr)
 	print("\ne.g.:    ./MinorityReport.py species.fna species.gff species-bug1.bowtie2.sam species-bug2.bowtie2.sam",file=sys.stderr)
-	print("Options: -vp  <minimum_variant_proportion>	    minimum fraction of reads at position supporting variant to accept (default=0.3).",file=sys.stderr)
+	print("\nNote: if using GTF or GFF2 format, be sure the file ends with '.gtf'",file=sys.stderr)
+	print("\nOptions: -vp  <minimum_variant_proportion>	    minimum fraction of reads at position supporting variant to accept (default=0.3).",file=sys.stderr)
 	print("         -wp  <maximum_variant_proportion>	    maximum fraction of reads at position supporting wildtype to accept (default=0.01).",file=sys.stderr)
 	print("         -vc  <minimum_variant_counts>	        minimum mutant-strain reads covering position to evaluate (default=30).",file=sys.stderr)
 	print("         -wc  <maximum_wildtype_variant_counts>	maximum parent-strain reads with variant to report (default=0).",file=sys.stderr)
@@ -1218,4 +1265,3 @@ if cnv:
 
 if writer:  writer.close()
 if position_read_report:  position_read_reporter.close()
-
