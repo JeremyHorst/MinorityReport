@@ -759,9 +759,12 @@ def read_gff(gff_file_handle,reference_sequences):
 							gene_type = line.split('gene_biotype ')[1].split(';')[0].upper().replace('"','').strip()
 				else:
 					entry_type = line.split()[2].upper()
-					gene_id = line.split('ID=')[1].split(';')[0].replace('"','').strip()
-					gene_type = line.split('Name=')[1].split(';')[0].upper().replace('"','').strip()
-					parent_mRNA = line.split('Parent=')[1].split(';')[0].replace('"','').strip()
+					if 'ID=' in line:
+						gene_id = line.split('ID=')[1].split(';')[0].replace('"','').strip()
+					if 'Name=' in line:
+						gene_type = line.split('Name=')[1].split(';')[0].upper().replace('"','').strip()
+					if 'Parent=' in line:
+						parent_mRNA = line.split('Parent=')[1].split(';')[0].replace('"','').strip()
 				# non-exon containing genomes SHOULD but may not have this entry.
 				
 				if gene_id.lower().startswith(desired_gene_type_in_GFF.lower()) or gene_type == desired_gene_type_in_GFF or entry_type == desired_gene_type_in_GFF:  # only protein coding regions will have a CDS entry
