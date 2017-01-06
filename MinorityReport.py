@@ -66,6 +66,7 @@ window_increment = 3000
 window_size = 3000
 cnv_report_frequency = 3000
 tile_position_mean = True
+softclips = True
 
 gencode = {'ATA':'I', 'ATC':'I', 'ATT':'I', 'ATG':'M', 'ACA':'T', 
 'ACC':'T', 'ACG':'T', 'ACT':'T', 'AAC':'N', 'AAT':'N', 'AAA':'K', 
@@ -500,15 +501,16 @@ def evidence_from_sam_alignment(sequence_evidence,reference_sequences,sam_file_h
 				else:  insertions=[]
 				if 'D' in cigar:  deletions = get_deletions(cigar)
 				else:  deletions=[]
-				if 'S' in cigar:  SoftClips = get_SoftClips(cigar)
+				if softclips and 'S' in cigar:  SoftClips = get_SoftClips(cigar)
 				else:  SoftClips=[]
 				
 				# get alignment info
 				aligned_read_position = int(read.split()[3])-1
 				# the MASTER script will grab nonmatching SAM lines from Paired-End reads, where the 2nd read hits the target chromosome, but not the first  
-				if trust_nonmatching_alignment:
-					if not reference_sequences.has_key(refseq_chromosome_ID) and reference_sequences.has_key(mate_refseq_chromosome_ID):
-						refseq_chromosome_ID = mate_refseq_chromosome_ID
+#20170106		# PROBLEM? The mate read will be picked up on its line - no double counting!!!
+#				if trust_nonmatching_alignment:
+#					if not reference_sequences.has_key(refseq_chromosome_ID) and reference_sequences.has_key(mate_refseq_chromosome_ID):
+#						refseq_chromosome_ID = mate_refseq_chromosome_ID
 				reference_sequence_length = reference_sequences[refseq_chromosome_ID][0]
 						
 				read_sequence = read.split()[9]
@@ -579,7 +581,7 @@ def evidence_from_sam_alignment(sequence_evidence,reference_sequences,sam_file_h
 				# add read to read count
 				insertion_length = get_insertion_length(cigar)
 				deletion_length = get_deletion_length(cigar)
-				end = aligned_read_position +read_length -insertion_length +deletion_length
+				end = aligned_read_position + read_length -insertion_length +deletion_length
 				# SoftClips are not factored in to alignment (thus "soft clip")
 #@				read_mapping[refseq_chromosome_ID] += [[aligned_read_position,end]]
 				
@@ -860,7 +862,8 @@ def make_evidence_hash_table(reference_sequence_file_handle):
 # load & run #
 ##############
 
-try:
+#try:
+if 1==1:
 	# load required input arguments
 	reference_sequence_file_handle = sys.argv[1]
 	gff_file_handle = sys.argv[2]
@@ -909,7 +912,8 @@ try:
 		position_read_report = True
 		position_read_reporter = open(sys.argv[sys.argv.index('-position_read_report')+1],'w')
 		position_read_reporter.write( '\t'.join(['chromosome','position','parent_counts','mutant_counts'])+'\n')
-
+	if '-keepsoft' in sys.argv:
+		softclips=False
 	if '-cnv' in sys.argv:
 		cnv = True
 		if '-window_size' in sys.argv:
@@ -962,7 +966,8 @@ try:
 	if verbose:
 		print('SAM mapping complete.',file=sys.stderr)
 	
-except:
+#except:
+if 1==2:
 	print("""
 MinorityReport.py is a python script meant to find genetic differences in parent-child diads or strain pairs by comparing genomic sequencing reads aligned to the same reference genome. 
 
@@ -980,6 +985,7 @@ The script MinorityReport-MASTER.py is meant to divide this task across processo
 	print("         -wtc <minimum_wildtype_total_counts>	minimum total parent-strain reads covering position to report (default=0).",file=sys.stderr)
 	print("",file=sys.stderr)
 	print("         -cnv     analyze Copy Number Variants. Also available through CNV_caller.py",file=sys.stderr)
+	print("         -keepsoft include read portions denoted as SoftClip for weak matches. default is to ignore.",file=sys.stderr)
 	print("         -median  calculate median instead of mean CNV for tile range of positions (default: mean).",file=sys.stderr)
 	print("         -window_size       <sliding window length>  cnv: size of window to check for each position  (default=3000).",file=sys.stderr)
 	print("         -window_increment  <sliding window spacing> cnv: increment for progressing through chromosome(s) (default=3000).",file=sys.stderr)
