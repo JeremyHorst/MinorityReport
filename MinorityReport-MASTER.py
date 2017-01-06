@@ -148,20 +148,25 @@ for chromosome in chromosomes:
 print('processing SAM files:',parent_sam,'&',mutant_sam, file=sys.stderr)
 if len(chromosomes) > 1:
 	for chromosome in chromosomes[2:]:
-	#	call_bash("""echo grep -P \"%s\\t\" %s \">\" %s &""" % (chromosome, parent_sam, tempdir + parent_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
-		call_bash("""grep -P \"%s\\t\" %s > %s &""" % (chromosome, parent_sam, tempdir + parent_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
-	#	call_bash("""echo grep -P \"%s\\t\" %s \">\" %s &""" % (chromosome, mutant_sam, tempdir + mutant_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam'), shell=True)
-		call_bash("""grep -P \"%s\\t\" %s > %s &""" % (chromosome, mutant_sam, tempdir + mutant_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
+##		call_bash("""grep -P \"%s\\t\" %s > %s &""" % (chromosome, parent_sam, tempdir + parent_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
+##		call_bash("""grep -P \"%s\\t\" %s > %s &""" % (chromosome, mutant_sam, tempdir + mutant_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
+#20170106. only grab match to chromosome ID, not mate chromosome 
+		call_bash("""awk '$3=="%s"' %s > %s &""" % (chromosome, parent_sam, tempdir + parent_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
+		call_bash("""awk '$3=="%s"' %s > %s &""" % (chromosome, mutant_sam, tempdir + mutant_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
 
 	# run the last pair sequentially, __not in background__, to allow extra time for the above to finish
 	# the first chromosome tends not to be the shortest, and lets do the last one as well, just in case
 	for chromosome in chromosomes[:2]:
-		call_bash("""grep -P \"%s\\t\" %s > %s""" % (chromosome, parent_sam, tempdir + parent_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
-		call_bash("""grep -P \"%s\\t\" %s > %s""" % (chromosome, mutant_sam, tempdir + mutant_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
+##		call_bash("""grep -P \"%s\\t\" %s > %s""" % (chromosome, parent_sam, tempdir + parent_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
+##		call_bash("""grep -P \"%s\\t\" %s > %s""" % (chromosome, mutant_sam, tempdir + mutant_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
+		call_bash("""awk '$3=="%s"' %s > %s""" % (chromosome, parent_sam, tempdir + parent_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
+		call_bash("""awk '$3=="%s"' %s > %s""" % (chromosome, mutant_sam, tempdir + mutant_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
 else:
 	chromosome = chromosomes[0]
-	call_bash("""grep -P \"%s\\t\" %s > %s""" % (chromosome, parent_sam, tempdir + parent_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
-	call_bash("""grep -P \"%s\\t\" %s > %s""" % (chromosome, mutant_sam, tempdir + mutant_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
+##	call_bash("""grep -P \"%s\\t\" %s > %s""" % (chromosome, parent_sam, tempdir + parent_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
+##	call_bash("""grep -P \"%s\\t\" %s > %s""" % (chromosome, mutant_sam, tempdir + mutant_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
+	call_bash("""awk '$3=="%s"' %s > %s""" % (chromosome, parent_sam, tempdir + parent_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
+	call_bash("""awk '$3=="%s"' %s > %s""" % (chromosome, mutant_sam, tempdir + mutant_sam.split('/')[-1].split('.sam')[0]+'-'+chromosome+'.sam') )
 	
 
 ################################################################################
@@ -205,5 +210,3 @@ if printme.strip():  print(printme, file=sys.stdout)
 if clear_temp_files:
 	# remove sub- SAM, GFF, & FASTA files
 	call_bash('rm -rf ./'+tempdir)
-	
-
