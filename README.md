@@ -30,7 +30,6 @@ Options:
          -pe  paired read matching alignments ONLY (default=False).
          -gene_type  <GFF gene type>		descriptor to find correct entry lines in GFF file.
          -cds evaluate CDS for start and stop codons in each CDS, i.e. don't trust GFF file (default=False).
-         -all report all variants whether nonsynonymous or only nucleotide changes (default=False).
          -position_read_report <output_file> output a file with the number of counts that map to each position in the genome for parent & mutant (default=False).
          -o   <output_file> specify output file (default: print to stdout).
 
