@@ -5,6 +5,7 @@
 # 20150826 Jeremy Horst
 # 20161220 added GTF/GFF2 option
 # 20161128 added SoftClip option in CIGAR string
+# 20170111 fixes CIGAR handling for multiple deletions and insertions in a read 
 #
 # INPUT:	FASTA of reference sequence
 #			GFF gene annotation file (SAME CHROMOSOME NAMES AS FASTA!!!)
@@ -48,7 +49,7 @@ minimum_variant_counts = 20
 maximum_wildtype_proportion = 0.1
 maximum_wildtype_variant_counts = 20
 minimum_wildtype_total_counts = 10
-desired_gene_type_in_GFF = 'CDS'
+desired_gene_type_in_GFF = 'cds'
 GFF_description_line = 'gene'
 description_key = 'description'
 GTF = False
@@ -66,7 +67,7 @@ window_increment = 3000
 window_size = 3000
 cnv_report_frequency = 3000
 tile_position_mean = True
-softclips = True
+#softclips = True
 
 gencode = {'ATA':'I', 'ATC':'I', 'ATT':'I', 'ATG':'M', 'ACA':'T', 
 'ACC':'T', 'ACG':'T', 'ACT':'T', 'AAC':'N', 'AAT':'N', 'AAA':'K', 
@@ -84,56 +85,39 @@ gencode = {'ATA':'I', 'ATC':'I', 'ATT':'I', 'ATG':'M', 'ACA':'T',
 #####################
 # general functions #
 #####################
-    
-def get_deletions(cigar):
-	deletions=[]
-	if 'D' in cigar:
-		read_position = 0
-		for dpart in cigar.split('D')[:-1]:
-			deletion_length = int(re.split('[A-Z]',dpart)[-1])
-			deletion_start_position = sum(int(a) for a in re.split('[A-Z]',dpart)[:-1])
-			# [ deletion length,  start w.r.t. read ]
-			deletions += [ [deletion_length, read_position + deletion_start_position] ]
-			read_position += deletion_start_position
-	return deletions
-
-def get_insertions(cigar):
+def handle_cigar(cigar, aligned_read_position):
+	allowable_cigar_letters = ['MIDNSHP=X']
+	# M = match or mismatch. simple; keep.
+	# I = insertion. add to indexing; keep
+	# D = deletion. do not count in indexing; keep.
+	# N = deletion. do not count in indexing; keep.
+	# S = soft clip. mismatch. Like M, but affects reported left-most alignment position when cigar stars with S; keep.
+	# H = hard clip. mismatch, removes string from sequence; ignore. 
+	# P = padding. refers to insertion in MSA not reference; ignore.
+	# = = match, same as M; keep.
+	# X = mismatch, same as M; keep.
+	# refseq_chromosome_ID starts AFTER softclip;
+	#  find when there are no letters in front of S
+	if not sum([ [0,1][h] for h in [c.isalpha() for c in cigar.split('S')[0]] ]):
+		aligned_read_position -= int(cigar.split('S')[0])
 	insertions=[]
-	if 'I' in cigar:
-		read_position = 0
-		for ipart in cigar.split('I')[:-1]:
-			insertion_length = int(re.split('[A-Z]',ipart)[-1])
-			insertion_start_position = sum(int(a) for a in re.split('[A-Z]',ipart)[:-1])
-			# [ insertion length,  start w.r.t. read ]
-			insertions += [ [insertion_length, read_position + insertion_start_position] ]
-			read_position += insertion_start_position + insertion_length
-	return insertions
-
-def get_SoftClips(cigar):
-	SoftClips=[]
-	if 'S' in cigar:
-		read_position = 0
-		for spart in cigar.split('S')[:-1]:
-			SoftClip_length = int(re.split('[A-Z]',spart)[-1])
-			SoftClip_start_position = sum(int(a) for a in re.split('[A-Z]',spart)[:-1])
-			# [ SoftClip length,  start w.r.t. read ]
-			SoftClips += [ [SoftClip_length, read_position + SoftClip_start_position] ]
-			read_position += SoftClip_start_position + SoftClip_length
-	return SoftClips
-
-def get_deletion_length(cigar):
-	deletion_length=0
-	if 'D' in cigar:
-		for dpart in cigar.split('D')[:-1]:
-			deletion_length += int(re.split('[A-Z]',dpart)[-1])
-	return deletion_length
-
-def get_insertion_length(cigar):
-	insertion_length=0
-	if 'I' in cigar:
-		for ipart in cigar.split('I')[:-1]:
-			insertion_length += int(re.split('[A-Z]',ipart)[-1])
-	return insertion_length
+	deletions=[]
+	last=0
+	read_position=0
+	for l in range(len(cigar)):
+		if cigar[l] in allowable_cigar_letters:
+			count = int(cigar[last:l])
+			last=l
+			if cigar[l] in 'MS=X':
+				read_position += count
+			elif cigar[l] in 'HP': 
+				ignore=True
+			elif cigar[l] in 'I':
+				insertions += [ [count, read_position] ]
+				read_position += count
+			elif cigar[l] in 'DN':
+				deletions += [ [count, read_position] ]
+	return aligned_read_position, insertions, deletions
 
 def get_sequence_from_fasta(fasta, name):										
 	#return ''.join('>'.join(open(fasta).read().split('>')[1:]).split(name)[1].split('\n>')[0].split('\n')[1:])
@@ -471,7 +455,6 @@ def does_mutation_change_amino_acid(genomic_position, variant_nucleotide, gene_m
 
 #@def evidence_from_sam_alignment(sequence_evidence,reference_sequences,sam_file_handle,read_mapping):
 def evidence_from_sam_alignment(sequence_evidence,reference_sequences,sam_file_handle):
-	
 	print("Mapping SAM alignments from", sam_file_handle, "to reference sequence...",file=sys.stderr)
 	
 	# relate SAM alignment file to reference sequence
@@ -497,15 +480,11 @@ def evidence_from_sam_alignment(sequence_evidence,reference_sequences,sam_file_h
 			cigar = read.split()[5]
 			if cigar != '0' and refseq_chromosome_ID != '*':
 				
-				if 'I' in cigar:  insertions = get_insertions(cigar)
-				else:  insertions=[]
-				if 'D' in cigar:  deletions = get_deletions(cigar)
-				else:  deletions=[]
-				if softclips and 'S' in cigar:  SoftClips = get_SoftClips(cigar)
-				else:  SoftClips=[]
-				
 				# get alignment info
 				aligned_read_position = int(read.split()[3])-1
+				
+				aligned_read_position, insertions, deletions = handle_cigar(cigar, aligned_read_position)
+				
 				# the MASTER script will grab nonmatching SAM lines from Paired-End reads, where the 2nd read hits the target chromosome, but not the first  
 #20170106		# PROBLEM? The mate read will be picked up on its line - no double counting!!!
 #				if trust_nonmatching_alignment:
@@ -514,11 +493,6 @@ def evidence_from_sam_alignment(sequence_evidence,reference_sequences,sam_file_h
 				reference_sequence_length = reference_sequences[refseq_chromosome_ID][0]
 						
 				read_sequence = read.split()[9]
-				
-				# remove soft clips from the sequence, starting from the end
-				SoftClips.reverse()
-				for SoftClip_length, SoftClip_position in SoftClips:
-					read_sequence = read_sequence[:SoftClip_position] + read_sequence[SoftClip_position+SoftClip_length:]
 				
 				read_length = len(read_sequence)
 				
@@ -568,6 +542,7 @@ def evidence_from_sam_alignment(sequence_evidence,reference_sequences,sam_file_h
 							sequence_evidence[refseq_chromosome_ID][variant_genomic_position][entry] = 0
 					else:	entry = read_sequence[read_index]
 					
+#					print('sequence_evidence-2',type(sequence_evidence),file=sys.stderr)
 					# store data as evidence
 					while len(sequence_evidence[refseq_chromosome_ID]) <= variant_genomic_position:
 						sequence_evidence[refseq_chromosome_ID] += [ {'A':0,'C':0,'G':0,'T':0} ]
@@ -579,9 +554,13 @@ def evidence_from_sam_alignment(sequence_evidence,reference_sequences,sam_file_h
 					read_index += 1	+ index_adder
 				
 				# add read to read count
-				insertion_length = get_insertion_length(cigar)
-				deletion_length = get_deletion_length(cigar)
-				end = aligned_read_position + read_length -insertion_length +deletion_length
+#				insertion_length = get_insertion_length(cigar)
+#				deletion_length = get_deletion_length(cigar)
+				
+				insertion_length = sum([ n[0] for n in insertions ])
+				deletion_length  = sum([ d[0] for d in deletions  ])
+				
+				end = aligned_read_position +read_length -insertion_length +deletion_length
 				# SoftClips are not factored in to alignment (thus "soft clip")
 #@				read_mapping[refseq_chromosome_ID] += [[aligned_read_position,end]]
 				
@@ -717,15 +696,19 @@ def read_gff(gff_file_handle,reference_sequences):
 					elif description_key+' ' in line:
 						description = line.split(description_key+' ')[1].split(';')[0].replace('%28','(').replace('%29',')').replace('%2C',',').replace('%2F','/').replace('+',' ').replace('"','').strip()
 					gene_descriptions[gene_id] = description
+					#print(gene_id,gene_descriptions[gene_id],file=sys.stderr)
+				
 				# get mRNA name that holds splice isoform together
 				if GTF and entry_type == desired_gene_type_in_GFF:
 					mRNA_id = line.split('exon_id ')[1].split(';')[0].replace('"','').strip()
 					parent_gene_id = line.split('gene_id ')[1].split(';')[0].replace('"','').strip()
 					mRNA_parent_gene_id[mRNA_id] = parent_gene_id
-				elif entry_type == 'mrna':
+					
+				elif entry_type == 'mrna': # or (not GTF and entry_type == desired_gene_type_in_GFF):
 					mRNA_id = line.split('ID=')[1].split(';')[0].replace('"','').strip()
 					parent_gene_id = line.split('Parent=')[1].split(';')[0].replace('"','').strip()
 					mRNA_parent_gene_id[mRNA_id] = parent_gene_id
+				
 				if GTF and entry_type == 'cds':
 					gene_id = line.split('gene_id ')[1].split(';')[0].replace('"','').strip()
 					exon_number = line.split('exon_number ')[1].split(';')[0].replace('"','').strip()
@@ -784,7 +767,11 @@ def read_gff(gff_file_handle,reference_sequences):
 							
 							# find gene descriptions
 							if GTF:	description = gene_descriptions[old_parent_mRNA]
-							else:	description = gene_descriptions[mRNA_parent_gene_id[old_parent_mRNA]]
+							else:
+								try:
+									description = gene_descriptions[mRNA_parent_gene_id[old_parent_mRNA]]
+								except:
+									description = ""
 							
 							# remove the "rna_" at the beginning
 							if old_parent_mRNA.startswith("rna_"):
@@ -818,7 +805,10 @@ def read_gff(gff_file_handle,reference_sequences):
 	if gene_id.lower().startswith(desired_gene_type_in_GFF.lower()) or gene_type == desired_gene_type_in_GFF or entry_type == desired_gene_type_in_GFF:
 		gene_start, gene_end, strand, protein_length, AA_indices, CDS_exons, stop = prep_gene_model(CDS_exons, parent_mRNA)
 		if not gff_model.has_key(refseq_chromosome_ID):  gff_model[refseq_chromosome_ID] = []
-		description = gene_descriptions[mRNA_parent_gene_id[parent_mRNA]]
+		try:
+			description = gene_descriptions[mRNA_parent_gene_id[parent_mRNA]]
+		except:
+			description = ''
 		simplified_mRNA_name = parent_mRNA[4:] # remove the "rna_" at the beginning
 		gff_model[refseq_chromosome_ID] += [[ gene_start, gene_end, strand, simplified_mRNA_name, gene_type, protein_length, AA_indices, CDS_exons, stop, description ]]
 	
@@ -831,8 +821,6 @@ def make_evidence_hash_table(reference_sequence_file_handle):
 	wt_sequence_evidence={}
 	mutant_sequence_evidence={}
 	reference_sequences={}
-#@	wt_reads={}
-#@	mutant_reads={}
 	chromosomes=[]
 	
 	# find all sequences
@@ -844,15 +832,13 @@ def make_evidence_hash_table(reference_sequence_file_handle):
 		chromosomes += [chromosome_name]
 		wt_sequence_evidence[chromosome_name]=[]
 		mutant_sequence_evidence[chromosome_name]=[]
-#@		wt_reads[chromosome_name]=[]
-#@		mutant_reads[chromosome_name]=[]
 		print('\tReference sequence', chromosome_name, 'length:', len(reference_sequence),file=sys.stderr)
 		for n in range(len(reference_sequence)):
 			
 			# set up new entry
 			wt_sequence_evidence[chromosome_name]		+= [ {'A':0,'C':0,'G':0,'T':0} ]
 			mutant_sequence_evidence[chromosome_name]	+= [ {'A':0,'C':0,'G':0,'T':0} ]
-#@	return wt_sequence_evidence, mutant_sequence_evidence, reference_sequences, wt_reads, mutant_reads, chromosomes
+	
 	return wt_sequence_evidence, mutant_sequence_evidence, reference_sequences, chromosomes
 
 #==============================================================================#
@@ -862,8 +848,8 @@ def make_evidence_hash_table(reference_sequence_file_handle):
 # load & run #
 ##############
 
-#try:
-if 1==1:
+try:
+#if 1==1:
 	# load required input arguments
 	reference_sequence_file_handle = sys.argv[1]
 	gff_file_handle = sys.argv[2]
@@ -912,8 +898,11 @@ if 1==1:
 		position_read_report = True
 		position_read_reporter = open(sys.argv[sys.argv.index('-position_read_report')+1],'w')
 		position_read_reporter.write( '\t'.join(['chromosome','position','parent_counts','mutant_counts'])+'\n')
-	if '-keepsoft' in sys.argv:
-		softclips=False
+	#if '-nosoft' in sys.argv:
+	#	softclips=False
+	if '-description_key' in sys.argv:
+		description_key = sys.argv[sys.argv.index('-description_key')+1]
+		#print('description_key changed to:',description_key, file=sys.stderr)
 	if '-cnv' in sys.argv:
 		cnv = True
 		if '-window_size' in sys.argv:
@@ -948,7 +937,6 @@ if 1==1:
 		print('\tmaximum wildtype counts',maximum_wildtype_variant_counts,file=sys.stderr)
 		
 	# load input sequence
-#@	wt_sequence_evidence, mutant_sequence_evidence, reference_sequences, wt_reads, mutant_reads, chromosomes = make_evidence_hash_table(reference_sequence_file_handle)
 	wt_sequence_evidence, mutant_sequence_evidence, reference_sequences, chromosomes = make_evidence_hash_table(reference_sequence_file_handle)
 	
 	# load gff gene model corresponding to reference sequence
@@ -956,18 +944,19 @@ if 1==1:
 	print('\t',sum([ len(gff_model[chromosome]) for chromosome in chromosomes ]),'genes',file=sys.stderr)
 	
 	# load sam alignment file, align to the reference sequence
-#@	mutant_sequence_evidence, mutant_reads, mutant_total_count = evidence_from_sam_alignment(mutant_sequence_evidence,reference_sequences,mutant_sam_file_handle,mutant_reads)
-	mutant_sequence_evidence, mutant_total_count = evidence_from_sam_alignment(mutant_sequence_evidence,reference_sequences,mutant_sam_file_handle)
-	# NOTE: reference_sequence[0] corresponds to sequence_evidence[1]
-	
-#@	wt_sequence_evidence, wt_reads, wt_total_count = evidence_from_sam_alignment(wt_sequence_evidence,reference_sequences,wt_sam_file_handle,wt_reads)
-	wt_sequence_evidence, wt_total_count = evidence_from_sam_alignment(wt_sequence_evidence,reference_sequences,wt_sam_file_handle)
+	if os.stat(mutant_sam_file_handle).st_size != 0:
+		mutant_sequence_evidence, mutant_total_count = evidence_from_sam_alignment(mutant_sequence_evidence,reference_sequences,mutant_sam_file_handle)
+		# NOTE: reference_sequence[0] corresponds to sequence_evidence[1]
+		if os.stat(wt_sam_file_handle).st_size != 0:
+			wt_sequence_evidence, wt_total_count = evidence_from_sam_alignment(wt_sequence_evidence,reference_sequences,wt_sam_file_handle)
+		else:  print('ERROR: empty file:', wt_sam_file_handle,file=sys.stderr)
+	else:  print('ERROR: empty file:', mutant_sam_file_handle,file=sys.stderr)
 	
 	if verbose:
 		print('SAM mapping complete.',file=sys.stderr)
 	
-#except:
-if 1==2:
+except:
+#if 1==2:
 	print("""
 MinorityReport.py is a python script meant to find genetic differences in parent-child diads or strain pairs by comparing genomic sequencing reads aligned to the same reference genome. 
 
@@ -1003,274 +992,275 @@ The script MinorityReport-MASTER.py is meant to divide this task across processo
 
 
 #@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#	
+if wt_sequence_evidence:
 
-# output title line 
-print("Preparing output...\n",file=sys.stderr)
-printlist =  [ '#score', 'chromosome', 'genomic_mutation', 'gene_mutation', 'protein_mutation', 'mutation_counts', 'mutation_proportion', 'mutant_position_counts', '|', 'parent_mutation_counts', 'parent_mutation_proportion', 'parent_position_counts', '|', 'gene_id', 'strand', 'protein_length', 'gene_description', '||', 'A-gene_variant', 'protein_variant', 'variant_counts', 'variant_proportion', '|', 'parent_variant_counts', 'parent_variant_proportion', '||', 'C-gene_variant', 'protein_variant', 'variant_counts', 'variant_proportion', '|', 'parent_variant_counts', 'parent_variant_proportion', '||', 'G-gene_variant', 'protein_variant', 'variant_counts', 'variant_proportion', '|', 'parent_variant_counts', 'parent_variant_proportion', '||', 'T-gene_variant', 'protein_variant', 'variant_counts', 'variant_proportion', '|', 'parent_variant_counts', 'parent_variant_proportion', '||', 'nonACGT-gene_variant', 'protein_variant', 'variant_counts', 'variant_proportion', '|', 'parent_variant_counts', 'parent_variant_proportion', '||']
-if writer: writer.write('\t'.join(printlist)+'\n')
-else: print('\t'.join(printlist), file=sys.stdout)
-
-# get statistics for later reporting
-mean_mutant_counts = mean([ sum(genomic_position.values()) for chromosome in mutant_sequence_evidence for genomic_position in mutant_sequence_evidence[chromosome] ])
-mean_wt_counts     = mean([ sum(genomic_position.values()) for chromosome in wt_sequence_evidence for genomic_position in wt_sequence_evidence[chromosome] ])
-
-# iterate through chromosomes and positions in child (variant)
-# filter for above thresholds, compare to parent (wildtype)
-
-position_unique_read_counts={}
-last_entered_position = -1
-for chromosome in chromosomes:
-	gene=0
-	
-	for genomic_position in range(reference_sequences[chromosome][0]):
-		
-		# get reference nucleotide
-		reference_nucleotide = reference_sequences[chromosome][1][genomic_position]
-		# e.g. sequence_evidence[chromosome][2456821] = {'A':3,'---':426,'C':5,'T':3,'G':51, 'GTCGTACGTAGCTAGC':20}
-		
-		# get sum of counts to this position
-		position_counts =  float(sum( mutant_sequence_evidence[chromosome][genomic_position].values() ))
-		
-		if position_counts:
-			
-			if position_read_report:
-				wt_position_counts = int(sum( wt_sequence_evidence[chromosome][genomic_position].values() ))
-				position_read_reporter.write( '\t'.join([ chromosome, genomic_position, str(wt_position_counts), str(int(round(position_counts))) ])+'\n')
-			# check for variants over % threshold
-			for entry in mutant_sequence_evidence[chromosome][genomic_position]:
-				
-				# focus on novel variants, and only report position once
-				if not entry == reference_nucleotide and not last_entered_position == genomic_position:
-					
-					# check if there are the minimum quantity of reads
-					entry_counts = mutant_sequence_evidence[chromosome][genomic_position][entry]
-					if entry_counts >= minimum_variant_counts:
-					
-						# check for variants over % threshold
-						variant_proportion = entry_counts / position_counts
-						if variant_proportion >= minimum_variant_proportion:
-							
-							# wildtype data
-							wt_position_counts = float(sum( wt_sequence_evidence[chromosome][genomic_position].values() ))
-							if wt_position_counts >= minimum_wildtype_total_counts:
-								if wt_sequence_evidence[chromosome][genomic_position].has_key(entry):
-									wt_entry_counts = wt_sequence_evidence[chromosome][genomic_position][entry]
-								else:  wt_entry_counts = 0
-								wt_nt_proportion = 0
-								if wt_position_counts:
-									wt_nt_proportion = float(wt_entry_counts)/wt_position_counts
-								
-								# wt/parent read count threshold
-								if (wt_entry_counts <= maximum_wildtype_variant_counts) and wt_nt_proportion <= maximum_wildtype_proportion: 
-									
-									# get gene information by relating to GFF model
-									gene_start=0; gene_end=0; variant_in_gene=False
-									while gene < len(gff_model[chromosome]) and gene_start < genomic_position and gene_end < genomic_position:
-										gene_start, gene_end = gff_model[chromosome][gene][:2]
-										if genomic_position+1 > gene_start and genomic_position < gene_end:  
-											variant_in_gene = gene
-										gene += 1
-									gene -= 1 # go back 1, not all, so the gene search for the next entry is quick
-									if gene<0: gene=0
-									
-									# is the variant in the type of gene of interest (e.g. protein-encoding)? 
-									if variant_in_gene:
-										
-										# get all gene details
-										gene_start, gene_end, strand, gene_id, gene_type, protein_length, AA_indices, CDS_exons, stop, description = gff_model[chromosome][variant_in_gene]
-										
-										# check if genomic_position is between exons	
-										in_exon = False
-										for CDS_exon in CDS_exons:
-											if genomic_position >= min(CDS_exon[:2]) and genomic_position < max(CDS_exon[:2]):
-												in_exon = True
-										
-										if in_exon:
-											# check if variant changes an amino acid
-											missense, position_in_codon, reference_codon, gene_position = does_mutation_change_amino_acid(genomic_position, entry, gff_model[chromosome][variant_in_gene])
-	
-											if (missense_only and missense != '-') or not missense_only:	 
-												
-												##########
-												# REPORT #
-												##########
-												
-												# chromosome
-												printlist =  [ chromosome ]
-												
-												####################################
-												# mutant genome change
-												printlist += [ reference_nucleotide+str(genomic_position+1)+entry ]
-												
-												# mutant gene change
-												# handle strand specificity to get nucleotides correct w.r.t. the gene
-												if strand == '-':
-													printlist += [ reverse_compliment(reference_nucleotide) + str(gene_position) + reverse_compliment(entry) ]
-												else:
-													printlist += [ reference_nucleotide + str(gene_position) + entry ]
-												
-												# mutant protein change
-												printlist += [ missense ]
-												
-												# entry counts, %, total
-												printlist += [ str(entry_counts), str( round(variant_proportion ,3) ), str(int(position_counts)), '|' ]
-												
-												# wt/parent counts, %, total
-												if wt_position_counts:
-													printlist += [ str(wt_entry_counts), str( round(wt_entry_counts / float(wt_position_counts) ,3) ), str(wt_position_counts), '|' ]
-												else:
-													printlist += [ str(wt_entry_counts), 'n/a', str(wt_position_counts), '|' ]
-													
-												# gene name information
-												printlist += [ gene_id, strand, str(protein_length), description, '||']
-												
-												####################################
-												####################################
-												
-												# check non-ACGT entries first, to catch data for ACTG's
-												nonACGT_printlist = []
-												if not entry in ['A','C','G','T']:
-													
-													# mutant data
-													if strand=='-':
-														nonACGT_printlist += [ reverse_compliment(reference_nucleotide) + str(gene_position) + reverse_compliment(entry), missense, str(entry_counts), '('+str( round(variant_proportion ,3) )+')', '|' ]
-													else:
-														nonACGT_printlist += [ reference_nucleotide + str(gene_position) + entry, missense, str(entry_counts), '('+str( round(variant_proportion ,3) )+')', '|' ]
-													
-													# wildtype data
-													if wt_sequence_evidence[chromosome][genomic_position].has_key(entry) and wt_position_counts:
-														nonACGT_printlist += [str(wt_entry_counts), '('+str( round(wt_entry_counts / wt_position_counts ,3) )+')', '||' ]
-													else:
-														nonACGT_printlist += ['0', '(0.000)', '||' ]
-													
-												for nt in ['A','C','G','T']:
-													
-													# mutant data
-													nt_counts = mutant_sequence_evidence[chromosome][genomic_position][nt]
-													variant_nt_proportion = nt_counts / position_counts
-													
-													# wildtype data
-													wt_nt_counts = wt_sequence_evidence[chromosome][genomic_position][nt]
-													
-													if strand == '+':
-														variant_codon = reference_codon[:position_in_codon] + nt + reference_codon[position_in_codon+1:]
-														gene_ref_nt = reference_nucleotide
-														variant_nt = nt
-													else:
-														variant_codon = reference_codon[:position_in_codon] + reverse_compliment(nt) + reference_codon[position_in_codon+1:]
-														gene_ref_nt = reverse_compliment(reference_nucleotide)
-														variant_nt = reverse_compliment(nt)
-														
-													if debug:  print('is the codon working?:',nt, reference_codon, gencode[reference_codon], position_in_codon, variant_codon, gencode[variant_codon], file=sys.stderr)  
-													
-													try:	variant_AA = gencode[variant_codon]
-													except: variant_AA = '-'
-													
-													# check if the genetic variant results in a different amino acid === missense variation
-													if missense[0] == variant_AA:  nt_missense = '-'
-													else:
-														for i in range(1,len(missense)):
-															if missense[i].isalpha(): break
-														nt_missense = missense[:i]+variant_AA
-													
-													printlist += [ gene_ref_nt + str(gene_position) + variant_nt, nt_missense, str(nt_counts), '('+str( round(variant_nt_proportion ,3) )+')', '|' ]
-													
-													# wildtype data
-													if wt_position_counts:	printlist += [str(wt_nt_counts), '('+str( round( wt_nt_counts / float(wt_position_counts) ,3) )+')', '||' ]
-													else:					printlist += ['0', '(0.000)', '||' ]
-												
-												# add importance score
-												# mutation_proportion * mutation_counts * mean_wt_counts / (parent_mutation_proportion * parent_mutation_counts *mean_mutant_counts)
-												#score = str(round( variant_proportion * (entry_counts/mean_mutant_counts)  /  ( 1 + wt_nt_proportion * (wt_entry_counts/mean_wt_counts) ),3))
-												score = str(round( (((entry_counts + position_counts) / mean_mutant_counts) + (wt_position_counts / mean_wt_counts) - ((position_counts - entry_counts) / position_counts)) / (1 + (wt_entry_counts/mean_wt_counts) ), 3))
-												printlist = list([score]) + printlist
-												
-												# report
-												printlist += nonACGT_printlist
-												if writer:  writer.write( '\t'.join(printlist) +'\n')
-												else: print('\t'.join(printlist),file=sys.stdout)
-												
-												if debug:
-													print('\nmissense, position in codon, reference codon, gene position, nt missense', missense, position_in_codon, reference_codon, gene_position,nt_missense,file=sys.stderr)
-													print(does_mutation_change_amino_acid(genomic_position, entry, gff_model[chromosome][variant_in_gene]),file=sys.stderr)
-													print(genomic_position, entry, gff_model[chromosome][variant_in_gene],file=sys.stderr)
-													print('\n',file=sys.stderr)
-											
-												last_entered_position = genomic_position
-	
-if cnv:
-	
-	#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#	
-	# CNV calculations
-	
-	# calculate tile size
-	#	if cnv_ratio_threshold >= 1:  TTT = Guassian_inverse(1 - 0.5*cnv_p_threshold)
-	#	else:                         TTT = Guassian_inverse(0.5*cnv_p_threshold)
-	#	t_threshold = abs(Guassian_inverse(cnv_p_threshold))
-	#	print('\tcnv_p_threshold:',cnv_p_threshold,'t_threshold:',t_threshold,file=sys.stderr)
-	#	window_size = int(round((total_mutant_reads*cnv_ratio_threshold*cnv_ratio_threshold + total_wt_reads)*reference_sequences[chromosome][0] * TTT*TTT / ((1-cnv_ratio_threshold)*(1-cnv_ratio_threshold)*total_mutant_reads*total_wt_reads)))
-	#	if(window_size%2)!=0: window_size+=1  # ease window staggering
-	#	print('\ttile size:',window_size,'chromosome size:',reference_sequences[chromosome][0],'ratio:',float(window_size)/reference_sequences[chromosome][0],file=sys.stderr)
-	
-	# count reads to each tile in genome for each data set
-#@	mutant_tile_reads = get_counts(mutant_reads)
-#@	wt_tile_reads = get_counts(wt_reads)
-	mutant_tile_reads = get_tile_counts(mutant_sequence_evidence)
-	wt_tile_reads     = get_tile_counts(wt_sequence_evidence)
-	
-	# get statistics
-	mean_mutant_tile_reads = mean([tile_count for chromosome in mutant_tile_reads for tile_count in mutant_tile_reads[chromosome].values()])
-	mean_wt_tile_reads     = mean([tile_count for chromosome in wt_tile_reads     for tile_count in wt_tile_reads[chromosome].values()])
-	
-	wt_mutant_ratio = mean_wt_tile_reads/mean_mutant_tile_reads
-	
-	if verbose:
-		print('sum mutant_tile_reads',sum([x for i in mutant_tile_reads for x in mutant_tile_reads[i].values()]),'sum wt_tile_reads',sum([x for i in wt_tile_reads for x in wt_tile_reads[i].values()]),file=sys.stderr)
-		print('mean_mutant_tile_reads',mean_mutant_tile_reads,'mean_wt_tile_reads',mean_wt_tile_reads,file=sys.stderr)
-	
-	# get CNV ratios for all tiles
-	tile_read_ratios = get_CNV_ratios(mutant_tile_reads, wt_tile_reads)
-	
-	# group together for statistical analysis
-	all_tile_read_ratios = [x for i in tile_read_ratios for x in tile_read_ratios[i].values()]
-	
-	# get mean & stdev of tile count ratios
-	mean_tile_read_ratios = mean(all_tile_read_ratios)
-	stdev_tile_read_ratios = stdev(all_tile_read_ratios, mean_tile_read_ratios)
-	if verbose:
-		print('mean, stdev of tile count ratios', mean_tile_read_ratios, stdev_tile_read_ratios, file=sys.stderr)
-	
 	# output title line 
-	printline = '\t'.join([ 'chromosome', 'start', 'end', 'wt_tile_counts', 'mutant_tile_counts', 'log2_CNV', 'probability', 'gene names' ])
-	if not cnv_writer:  print(printline, file=sys.stdout)
-	else: cnv_writer.write(printline+'\n')
+	print("Preparing output...\n",file=sys.stderr)
+	printlist =  [ '#score', 'chromosome', 'genomic_mutation', 'gene_mutation', 'protein_mutation', 'mutation_counts', 'mutation_proportion', 'mutant_position_counts', '|', 'parent_mutation_counts', 'parent_mutation_proportion', 'parent_position_counts', '|', 'gene_id', 'strand', 'protein_length', 'gene_description', '||', 'A-gene_variant', 'protein_variant', 'variant_counts', 'variant_proportion', '|', 'parent_variant_counts', 'parent_variant_proportion', '||', 'C-gene_variant', 'protein_variant', 'variant_counts', 'variant_proportion', '|', 'parent_variant_counts', 'parent_variant_proportion', '||', 'G-gene_variant', 'protein_variant', 'variant_counts', 'variant_proportion', '|', 'parent_variant_counts', 'parent_variant_proportion', '||', 'T-gene_variant', 'protein_variant', 'variant_counts', 'variant_proportion', '|', 'parent_variant_counts', 'parent_variant_proportion', '||', 'nonACGT-gene_variant', 'protein_variant', 'variant_counts', 'variant_proportion', '|', 'parent_variant_counts', 'parent_variant_proportion', '||']
+	if writer: writer.write('\t'.join(printlist)+'\n')
+	else: print('\t'.join(printlist), file=sys.stdout)
 	
+	# get statistics for later reporting
+	mean_mutant_counts = mean([ sum(genomic_position.values()) for chromosome in mutant_sequence_evidence for genomic_position in mutant_sequence_evidence[chromosome] ])
+	mean_wt_counts     = mean([ sum(genomic_position.values()) for chromosome in wt_sequence_evidence for genomic_position in wt_sequence_evidence[chromosome] ])
+	
+	# iterate through chromosomes and positions in child (variant)
+	# filter for above thresholds, compare to parent (wildtype)
+	
+	position_unique_read_counts={}
+	last_entered_position = -1
 	for chromosome in chromosomes:
-		len_gff_model_chromo = len(gff_model[chromosome])
-		tiles = range(0, reference_sequences[chromosome][0] - window_size, cnv_report_frequency)
-		for tile_start in tiles:
+		gene=0
+		
+		for genomic_position in range(reference_sequences[chromosome][0]):
 			
-			tile_end = tile_start + window_size
+			# get reference nucleotide
+			reference_nucleotide = reference_sequences[chromosome][1][genomic_position]
+			# e.g. sequence_evidence[chromosome][2456821] = {'A':3,'---':426,'C':5,'T':3,'G':51, 'GTCGTACGTAGCTAGC':20}
 			
-			log2_CNV = tile_read_ratios[chromosome][tile_start]						#
-			z = z_score(log2_CNV, mean_tile_read_ratios, stdev_tile_read_ratios)
+			# get sum of counts to this position
+			position_counts =  float(sum( mutant_sequence_evidence[chromosome][genomic_position].values() ))
 			
-			# log2_CNV probability calculation
-			if z >= 0:  p = 2*(1-Guassian(z))
-			else:       p = 2*Guassian(z)
-			if p>1 and verbose:  print('p>1:',p,'log2_CNV',log2_CNV,'z',z,'Guassian(z)',Guassian(z), file=sys.stderr)
+			if position_counts:
 				
-			# get gene information by relating to GFF model
-			gene_names = get_gene_names(tile_start, tile_end)
-			
-			# look up other data for reporting
-			mutant_tile_counts = mutant_tile_reads[chromosome][tile_start]			#
-			wt_tile_counts = wt_tile_reads[chromosome][tile_start]					#
-			
-			# report
-			printline = '\t'.join([ chromosome, str(tile_start), str(tile_end), str(round(wt_tile_counts,1)), str(round(mutant_tile_counts,1)), str(round(log2_CNV,3)), str(p), gene_names ])
-			if not cnv_writer:  print(printline, file=sys.stdout)
-			else: cnv_writer.write(printline+'\n')
-
-if writer:  writer.close()
-if position_read_report:  position_read_reporter.close()
+				if position_read_report:
+					wt_position_counts = int(sum( wt_sequence_evidence[chromosome][genomic_position].values() ))
+					position_read_reporter.write( '\t'.join([ chromosome, genomic_position, str(wt_position_counts), str(int(round(position_counts))) ])+'\n')
+				# check for variants over % threshold
+				for entry in mutant_sequence_evidence[chromosome][genomic_position]:
+					
+					# focus on novel variants, and only report position once
+					if not entry == reference_nucleotide and not last_entered_position == genomic_position:
+						
+						# check if there are the minimum quantity of reads
+						entry_counts = mutant_sequence_evidence[chromosome][genomic_position][entry]
+						if entry_counts >= minimum_variant_counts:
+						
+							# check for variants over % threshold
+							variant_proportion = entry_counts / position_counts
+							if variant_proportion >= minimum_variant_proportion:
+								
+								# wildtype data
+								wt_position_counts = float(sum( wt_sequence_evidence[chromosome][genomic_position].values() ))
+								if wt_position_counts >= minimum_wildtype_total_counts:
+									if wt_sequence_evidence[chromosome][genomic_position].has_key(entry):
+										wt_entry_counts = wt_sequence_evidence[chromosome][genomic_position][entry]
+									else:  wt_entry_counts = 0
+									wt_nt_proportion = 0
+									if wt_position_counts:
+										wt_nt_proportion = float(wt_entry_counts)/wt_position_counts
+									
+									# wt/parent read count threshold
+									if (wt_entry_counts <= maximum_wildtype_variant_counts) and wt_nt_proportion <= maximum_wildtype_proportion: 
+										
+										# get gene information by relating to GFF model
+										gene_start=0; gene_end=0; variant_in_gene=False
+										while gene < len(gff_model[chromosome]) and gene_start < genomic_position and gene_end < genomic_position:
+											gene_start, gene_end = gff_model[chromosome][gene][:2]
+											if genomic_position+1 > gene_start and genomic_position < gene_end:  
+												variant_in_gene = gene
+											gene += 1
+										gene -= 1 # go back 1, not all, so the gene search for the next entry is quick
+										if gene<0: gene=0
+										
+										# is the variant in the type of gene of interest (e.g. protein-encoding)? 
+										if variant_in_gene:
+											
+											# get all gene details
+											gene_start, gene_end, strand, gene_id, gene_type, protein_length, AA_indices, CDS_exons, stop, description = gff_model[chromosome][variant_in_gene]
+											
+											# check if genomic_position is between exons	
+											in_exon = False
+											for CDS_exon in CDS_exons:
+												if genomic_position >= min(CDS_exon[:2]) and genomic_position < max(CDS_exon[:2]):
+													in_exon = True
+											
+											if in_exon:
+												# check if variant changes an amino acid
+												missense, position_in_codon, reference_codon, gene_position = does_mutation_change_amino_acid(genomic_position, entry, gff_model[chromosome][variant_in_gene])
+		
+												if (missense_only and missense != '-') or not missense_only:	 
+													
+													##########
+													# REPORT #
+													##########
+													
+													# chromosome
+													printlist =  [ chromosome ]
+													
+													####################################
+													# mutant genome change
+													printlist += [ reference_nucleotide+str(genomic_position+1)+entry ]
+													
+													# mutant gene change
+													# handle strand specificity to get nucleotides correct w.r.t. the gene
+													if strand == '-':
+														printlist += [ reverse_compliment(reference_nucleotide) + str(gene_position) + reverse_compliment(entry) ]
+													else:
+														printlist += [ reference_nucleotide + str(gene_position) + entry ]
+													
+													# mutant protein change
+													printlist += [ missense ]
+													
+													# entry counts, %, total
+													printlist += [ str(entry_counts), str( round(variant_proportion ,3) ), str(int(position_counts)), '|' ]
+													
+													# wt/parent counts, %, total
+													if wt_position_counts:
+														printlist += [ str(wt_entry_counts), str( round(wt_entry_counts / float(wt_position_counts) ,3) ), str(wt_position_counts), '|' ]
+													else:
+														printlist += [ str(wt_entry_counts), 'n/a', str(wt_position_counts), '|' ]
+														
+													# gene name information
+													printlist += [ gene_id, strand, str(protein_length), description, '||']
+													
+													####################################
+													####################################
+													
+													# check non-ACGT entries first, to catch data for ACTG's
+													nonACGT_printlist = []
+													if not entry in ['A','C','G','T']:
+														
+														# mutant data
+														if strand=='-':
+															nonACGT_printlist += [ reverse_compliment(reference_nucleotide) + str(gene_position) + reverse_compliment(entry), missense, str(entry_counts), '('+str( round(variant_proportion ,3) )+')', '|' ]
+														else:
+															nonACGT_printlist += [ reference_nucleotide + str(gene_position) + entry, missense, str(entry_counts), '('+str( round(variant_proportion ,3) )+')', '|' ]
+														
+														# wildtype data
+														if wt_sequence_evidence[chromosome][genomic_position].has_key(entry) and wt_position_counts:
+															nonACGT_printlist += [str(wt_entry_counts), '('+str( round(wt_entry_counts / wt_position_counts ,3) )+')', '||' ]
+														else:
+															nonACGT_printlist += ['0', '(0.000)', '||' ]
+														
+													for nt in ['A','C','G','T']:
+														
+														# mutant data
+														nt_counts = mutant_sequence_evidence[chromosome][genomic_position][nt]
+														variant_nt_proportion = nt_counts / position_counts
+														
+														# wildtype data
+														wt_nt_counts = wt_sequence_evidence[chromosome][genomic_position][nt]
+														
+														if strand == '+':
+															variant_codon = reference_codon[:position_in_codon] + nt + reference_codon[position_in_codon+1:]
+															gene_ref_nt = reference_nucleotide
+															variant_nt = nt
+														else:
+															variant_codon = reference_codon[:position_in_codon] + reverse_compliment(nt) + reference_codon[position_in_codon+1:]
+															gene_ref_nt = reverse_compliment(reference_nucleotide)
+															variant_nt = reverse_compliment(nt)
+															
+														if debug:  print('is the codon working?:',nt, reference_codon, gencode[reference_codon], position_in_codon, variant_codon, gencode[variant_codon], file=sys.stderr)  
+														
+														try:	variant_AA = gencode[variant_codon]
+														except: variant_AA = '-'
+														
+														# check if the genetic variant results in a different amino acid === missense variation
+														if missense[0] == variant_AA:  nt_missense = '-'
+														else:
+															for i in range(1,len(missense)):
+																if missense[i].isalpha(): break
+															nt_missense = missense[:i]+variant_AA
+														
+														printlist += [ gene_ref_nt + str(gene_position) + variant_nt, nt_missense, str(nt_counts), '('+str( round(variant_nt_proportion ,3) )+')', '|' ]
+														
+														# wildtype data
+														if wt_position_counts:	printlist += [str(wt_nt_counts), '('+str( round( wt_nt_counts / float(wt_position_counts) ,3) )+')', '||' ]
+														else:					printlist += ['0', '(0.000)', '||' ]
+													
+													# add importance score
+													# mutation_proportion * mutation_counts * mean_wt_counts / (parent_mutation_proportion * parent_mutation_counts *mean_mutant_counts)
+													#score = str(round( variant_proportion * (entry_counts/mean_mutant_counts)  /  ( 1 + wt_nt_proportion * (wt_entry_counts/mean_wt_counts) ),3))
+													score = str(round( (((entry_counts + position_counts) / mean_mutant_counts) + (wt_position_counts / mean_wt_counts) - ((position_counts - entry_counts) / position_counts)) / (1 + (wt_entry_counts/mean_wt_counts) ), 3))
+													printlist = list([score]) + printlist
+													
+													# report
+													printlist += nonACGT_printlist
+													if writer:  writer.write( '\t'.join(printlist) +'\n')
+													else: print('\t'.join(printlist),file=sys.stdout)
+													
+													if debug:
+														print('\nmissense, position in codon, reference codon, gene position, nt missense', missense, position_in_codon, reference_codon, gene_position,nt_missense,file=sys.stderr)
+														print(does_mutation_change_amino_acid(genomic_position, entry, gff_model[chromosome][variant_in_gene]),file=sys.stderr)
+														print(genomic_position, entry, gff_model[chromosome][variant_in_gene],file=sys.stderr)
+														print('\n',file=sys.stderr)
+												
+													last_entered_position = genomic_position
+		
+	if cnv:
+		
+		#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#@#	
+		# CNV calculations
+		
+		# calculate tile size
+		#	if cnv_ratio_threshold >= 1:  TTT = Guassian_inverse(1 - 0.5*cnv_p_threshold)
+		#	else:                         TTT = Guassian_inverse(0.5*cnv_p_threshold)
+		#	t_threshold = abs(Guassian_inverse(cnv_p_threshold))
+		#	print('\tcnv_p_threshold:',cnv_p_threshold,'t_threshold:',t_threshold,file=sys.stderr)
+		#	window_size = int(round((total_mutant_reads*cnv_ratio_threshold*cnv_ratio_threshold + total_wt_reads)*reference_sequences[chromosome][0] * TTT*TTT / ((1-cnv_ratio_threshold)*(1-cnv_ratio_threshold)*total_mutant_reads*total_wt_reads)))
+		#	if(window_size%2)!=0: window_size+=1  # ease window staggering
+		#	print('\ttile size:',window_size,'chromosome size:',reference_sequences[chromosome][0],'ratio:',float(window_size)/reference_sequences[chromosome][0],file=sys.stderr)
+		
+		# count reads to each tile in genome for each data set
+	#@	mutant_tile_reads = get_counts(mutant_reads)
+	#@	wt_tile_reads = get_counts(wt_reads)
+		mutant_tile_reads = get_tile_counts(mutant_sequence_evidence)
+		wt_tile_reads     = get_tile_counts(wt_sequence_evidence)
+		
+		# get statistics
+		mean_mutant_tile_reads = mean([tile_count for chromosome in mutant_tile_reads for tile_count in mutant_tile_reads[chromosome].values()])
+		mean_wt_tile_reads     = mean([tile_count for chromosome in wt_tile_reads     for tile_count in wt_tile_reads[chromosome].values()])
+		
+		wt_mutant_ratio = mean_wt_tile_reads/mean_mutant_tile_reads
+		
+		if verbose:
+			print('sum mutant_tile_reads',sum([x for i in mutant_tile_reads for x in mutant_tile_reads[i].values()]),'sum wt_tile_reads',sum([x for i in wt_tile_reads for x in wt_tile_reads[i].values()]),file=sys.stderr)
+			print('mean_mutant_tile_reads',mean_mutant_tile_reads,'mean_wt_tile_reads',mean_wt_tile_reads,file=sys.stderr)
+		
+		# get CNV ratios for all tiles
+		tile_read_ratios = get_CNV_ratios(mutant_tile_reads, wt_tile_reads)
+		
+		# group together for statistical analysis
+		all_tile_read_ratios = [x for i in tile_read_ratios for x in tile_read_ratios[i].values()]
+		
+		# get mean & stdev of tile count ratios
+		mean_tile_read_ratios = mean(all_tile_read_ratios)
+		stdev_tile_read_ratios = stdev(all_tile_read_ratios, mean_tile_read_ratios)
+		if verbose:
+			print('mean, stdev of tile count ratios', mean_tile_read_ratios, stdev_tile_read_ratios, file=sys.stderr)
+		
+		# output title line 
+		printline = '\t'.join([ 'chromosome', 'start', 'end', 'wt_tile_counts', 'mutant_tile_counts', 'log2_CNV', 'probability', 'gene names' ])
+		if not cnv_writer:  print(printline, file=sys.stdout)
+		else: cnv_writer.write(printline+'\n')
+		
+		for chromosome in chromosomes:
+			len_gff_model_chromo = len(gff_model[chromosome])
+			tiles = range(0, reference_sequences[chromosome][0] - window_size, cnv_report_frequency)
+			for tile_start in tiles:
+				
+				tile_end = tile_start + window_size
+				
+				log2_CNV = tile_read_ratios[chromosome][tile_start]						#
+				z = z_score(log2_CNV, mean_tile_read_ratios, stdev_tile_read_ratios)
+				
+				# log2_CNV probability calculation
+				if z >= 0:  p = 2*(1-Guassian(z))
+				else:       p = 2*Guassian(z)
+				if p>1 and verbose:  print('p>1:',p,'log2_CNV',log2_CNV,'z',z,'Guassian(z)',Guassian(z), file=sys.stderr)
+					
+				# get gene information by relating to GFF model
+				gene_names = get_gene_names(tile_start, tile_end)
+				
+				# look up other data for reporting
+				mutant_tile_counts = mutant_tile_reads[chromosome][tile_start]			#
+				wt_tile_counts = wt_tile_reads[chromosome][tile_start]					#
+				
+				# report
+				printline = '\t'.join([ chromosome, str(tile_start), str(tile_end), str(round(wt_tile_counts,1)), str(round(mutant_tile_counts,1)), str(round(log2_CNV,3)), str(p), gene_names ])
+				if not cnv_writer:  print(printline, file=sys.stdout)
+				else: cnv_writer.write(printline+'\n')
+	
+	if writer:  writer.close()
+	if position_read_report:  position_read_reporter.close()
