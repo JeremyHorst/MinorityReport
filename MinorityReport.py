@@ -984,7 +984,7 @@ The script MinorityReport-MASTER.py is meant to divide this task across processo
 	print("         -pe  paired read matching alignments ONLY (default=False).",file=sys.stderr)
 	print("         -gene_type  <GFF gene type>		descriptor to find correct entry lines in GFF file.",file=sys.stderr)
 	print("         -cds evaluate CDS for start and stop codons in each CDS, i.e. don't trust GFF file (default=False).",file=sys.stderr)
-	print("         -all report all variants whether nonsynonymous or only nucleotide changes (default=False).",file=sys.stderr)
+#	print("         -all report all variants whether nonsynonymous or only nucleotide changes (default=False).",file=sys.stderr)
 	print("         -position_read_report <output_file> output a file with the number of counts that map to each position in the genome for parent & mutant (default=False).",file=sys.stderr)
 	print("         -o   <output_file> specify output file (default: print to stdout).",file=sys.stderr)
 	quit()
