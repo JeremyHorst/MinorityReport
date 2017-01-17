@@ -5,7 +5,7 @@
 # 20150826 Jeremy Horst
 # 20161220 added GTF/GFF2 option
 # 20161128 added SoftClip option in CIGAR string
-# 20170111 fixes CIGAR handling for multiple deletions and insertions in a read 
+# 20170111 fixed CIGAR handling for multiple deletions and insertions in a read 
 #
 # INPUT:	FASTA of reference sequence
 #			GFF gene annotation file (SAME CHROMOSOME NAMES AS FASTA!!!)
@@ -1025,7 +1025,7 @@ if wt_sequence_evidence:
 				
 				if position_read_report:
 					wt_position_counts = int(sum( wt_sequence_evidence[chromosome][genomic_position].values() ))
-					position_read_reporter.write( '\t'.join([ chromosome, genomic_position, str(wt_position_counts), str(int(round(position_counts))) ])+'\n')
+					position_read_reporter.write( '\t'.join([ chromosome, str(genomic_position), str(wt_position_counts), str(int(round(position_counts))) ])+'\n')
 				# check for variants over % threshold
 				for entry in mutant_sequence_evidence[chromosome][genomic_position]:
 					
