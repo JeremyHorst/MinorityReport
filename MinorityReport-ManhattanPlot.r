@@ -16,8 +16,9 @@ library(scales)
 library("cowplot")
 
 # arrange chromosomes in proper order
+chromosome_ouput_order <- levels(as.factor(input_data$chromosome))
 ## NOTE: upate chromosomes as you prefer for your organism
-chromosome_ouput_order <- c("chr1","chr2","chr3","chr4","chr5","chr6","chr7","chr8","chr9","chr10","chr11","chr12","chr13","chr14","plastid","mito")
+#chromosome_ouput_order <- c("chr1","chr2","chr3","chr4","chr5","chr6","chr7","chr8","chr9","chr10","chr11","chr12","chr13","chr14","plastid","mito")
 ordered_input_data<-arrange(transform(input_data,chromosome=factor(chromosome,levels=chromosome_ouput_order)),chromosome)
 
 # set vertical axis limits symmetrically, with at least -3.9 to 3.9 range
