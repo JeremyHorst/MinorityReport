@@ -33,5 +33,5 @@ mut_reads <- qplot() + geom_point( aes(x=start, y=ordered_input_data$mutant_tile
 wt_reads  <- qplot() + geom_point( aes(x=start, y=ordered_input_data$wt_tile_counts,     color='Parent'), data=ordered_input_data, size=0.3) + facet_grid(~chromosome, scales="free_x", space="free_x") + labs(x="", y="")           + guides(colour = guide_legend(override.aes = list(size=2))) + theme(panel.background = element_rect(fill = 'grey95'), legend.key=element_rect(fill='white'), axis.text.x=element_blank(), axis.line = element_blank(), axis.ticks.x=element_blank(), strip.text.x = element_blank()) + scale_x_continuous(breaks=seq(0,1e7,1e6), expand=c(0, 0)) + scale_y_log10( limits=c(0.1,most_reads), labels = trans_format("log10", math_format(10^.x)) ) + labs(color="") + scale_colour_manual(values = c("grey20"))
 
 # print it input_data together
-pdf("__OUTPUT_FILENAME__.pdf", width = 12, height = 3, onefile=FALSE)
 ggdraw() + draw_plot(CNVs, 0, 1/3, 1, 2/3) + draw_plot(mut_reads, 0.002725, .16, .98375, .31) + draw_plot(wt_reads, 0.002725, 0, .98375, .31) + panel_border(remove = TRUE)
+ggsave("__OUTPUT_FILENAME__.pdf", plot=last_plot(), width = 12, height = 3)
